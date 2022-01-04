@@ -1,5 +1,6 @@
 import abc
 import attr
+import ipaddress
 import re
 
 BLOCK_TYPE_RESOURCE = "resource"
@@ -8,7 +9,7 @@ BLOCK_TYPE_VARIABLE = "variable"
 BLOCK_TYPE_DATA = "data"
 
 #When we match this for the value of an attribute we don't quote the whole string
-NO_QUOTES_ATTR_RE = re.compile("(^file.*$|^var\..*$|^openstack_.*)")
+NO_QUOTES_ATTR_RE = re.compile("(^file.*$|^var\..*$|^openstack_.*|^data\..*$)")
 
 def _list_to_string(ll):
     text = ""
@@ -38,6 +39,8 @@ class HclAttribute(abc.ABC):
     def render(self):
         text = f"    {self.type} " + "{\n"
         for argument, value in self.arguments.items():
+            if not value:
+                continue
             if isinstance(value, bool):
                 value = str(value).lower()
             if NO_QUOTES_ATTR_RE.match(value):
@@ -63,7 +66,7 @@ class HclObject(abc.ABC):
             text = f'{self.block_type} "{self.block_name}"' + " {\n"
         if self.arguments is not None:
             for argument, value in self.arguments.items():
-                if not value:
+                if value is None:
                     continue
                 if isinstance(value, bool):
                     value = str(value).lower()
@@ -150,6 +153,7 @@ class ResourceOpenstackNetworkingRouterInterfaceV2(HclObject):
 
 @attr.s
 class ResourceOpenstackNetworkingNetworkV2(HclObject):
+    network_id = attr.ib(default=None)
     class ValueSpecs(HclMetaArgument):
 
         @classmethod
@@ -160,7 +164,7 @@ class ResourceOpenstackNetworkingNetworkV2(HclObject):
             )
 
     @classmethod
-    def create(cls, name, admin_state_up=True, port_security_enabled=False):
+    def create(cls, name, network_id, admin_state_up=True, port_security_enabled=False):
         return cls(
             block_type=BLOCK_TYPE_RESOURCE,
             block_label="openstack_networking_network_v2",
@@ -172,13 +176,16 @@ class ResourceOpenstackNetworkingNetworkV2(HclObject):
             meta_arguments=[ResourceOpenstackNetworkingNetworkV2.ValueSpecs.create(
                 port_security_enabled=port_security_enabled
             )],
+            network_id=network_id,
         )
 
 
 @attr.s
 class DataOpenstackNetworkingNetworkV2(HclObject):
+    network_name = attr.ib(default=None)
+    network_id = attr.ib(default=None)
     @classmethod
-    def create(cls, name, network_name):
+    def create(cls, name, network_name, network_id):
         return cls(
             block_type=BLOCK_TYPE_DATA,
             block_label="openstack_networking_network_v2",
@@ -186,15 +193,23 @@ class DataOpenstackNetworkingNetworkV2(HclObject):
             arguments={
                 "name": network_name,
             },
+            network_name=network_name,
+            network_id=network_id,
         )
 
 
 @attr.s
 class ResourceOpenstackNetworkingSubnetV2(HclObject):
+    subnet_name = attr.ib(default=None)
+    network_id = attr.ib(default=None)
+    cidr = attr.ib(default=None)
+    available_hosts = attr.ib(default=None)
+    gateway = attr.ib(default=None)
     @classmethod
     def create(
         cls,
         name,
+        network_id,
         cidr="169.254.0.0/16",
         ip_version="4",
         enable_dhcp=False,
@@ -214,14 +229,22 @@ class ResourceOpenstackNetworkingSubnetV2(HclObject):
                 "no_gateway": no_gateway,
                 "dns_nameservers": dns_nameservers,
             },
+            subnet_name=name,
+            network_id=network_id,
+            cidr=cidr,
+            available_hosts=list(ipaddress.ip_network(cidr, strict=False).hosts())
         )
 
 
 @attr.s
 class ResourceOpenstackNetworkingPortV2(HclObject):
+    name = attr.ib(default=None)
+    subnet_name = attr.ib(default=None)
+    address = attr.ib(default=None)
+    instance = attr.ib(default=None)
     class FixedIP(HclAttribute):
         @classmethod
-        def create(cls, subnet, address="IMPLEMENT_THIS"):
+        def create(cls, subnet, address):
             return cls(
                 type="fixed_ip",
                 arguments={
@@ -234,7 +257,9 @@ class ResourceOpenstackNetworkingPortV2(HclObject):
     def create(
         cls,
         name,
-        network_name,
+        subnet_name,
+        address,
+        instance,
     ):
         return cls(
             block_type=BLOCK_TYPE_RESOURCE,
@@ -242,13 +267,18 @@ class ResourceOpenstackNetworkingPortV2(HclObject):
             block_name=name,
             arguments={
                 "name": name,
-                "network_id": f"openstack_networking_network_v2.{network_name}.id"
+                "network_id": f"openstack_networking_network_v2.{subnet_name}.id"
             },
             attributes=[
                 ResourceOpenstackNetworkingPortV2.FixedIP.create(
-                    subnet=network_name,
+                    subnet=subnet_name,
+                    address=address,
                 )
-            ]
+            ],
+            name=name,
+            subnet_name=subnet_name,
+            address=address,
+            instance=instance,
         )
 
 
@@ -281,7 +311,7 @@ class ResourceOpenstackComputeInstanceV2(HclObject):
                 "image_name": image_name,
                 "flavor_name": flavor_name,
                 "config_drive": True,
-                "user_data": user_data,
+                "user_data": f"data.template_cloudinit_config.{user_data}.rendered",
             },
             attributes=[
                 ResourceOpenstackComputeInstanceV2.Network.create(
