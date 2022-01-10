@@ -3,13 +3,14 @@ import attr
 import ipaddress
 import re
 
-BLOCK_TYPE_RESOURCE = "resource"
-BLOCK_TYPE_PROVIDER = "provider"
-BLOCK_TYPE_VARIABLE = "variable"
 BLOCK_TYPE_DATA = "data"
+BLOCK_TYPE_OUTPUT = "output"
+BLOCK_TYPE_PROVIDER = "provider"
+BLOCK_TYPE_RESOURCE = "resource"
+BLOCK_TYPE_VARIABLE = "variable"
 
 #When we match this for the value of an attribute we don't quote the whole string
-NO_QUOTES_ATTR_RE = re.compile("(^file.*$|^var\..*$|^openstack_.*|^data\..*$)")
+NO_QUOTES_ATTR_RE = re.compile("(^file.*$|^var\..*$|^openstack_.*$|^data\..*$|^element\(.*$)")
 
 def _list_to_string(ll):
     text = ""
@@ -27,7 +28,10 @@ class HclMetaArgument(abc.ABC):
         for argument, value in self.arguments.items():
             if isinstance(value, bool):
                 value = str(value).lower()
-            text += f"        {argument} = \"{value}\"" + "\n"
+            if NO_QUOTES_ATTR_RE.match(value):
+                text += f"        {argument} = {value}" + "\n"
+            else:
+                text += f"        {argument} = \"{value}\"" + "\n"
         text += "    }\n"
         return text
 
@@ -102,6 +106,18 @@ class HclVariable(HclObject):
             }
     )
 
+@attr.s
+class HclOutputFloatingip(HclObject):
+    @classmethod
+    def create(cls, name, flip_name):
+        return cls(
+            block_type=BLOCK_TYPE_OUTPUT,
+            block_label=None,
+            block_name=name,
+            arguments={
+                "value": f"${{openstack_networking_floatingip_v2.{flip_name}.address}}",
+            }
+        )
 
 @attr.s
 class ProviderOpenstack(HclObject):
@@ -204,7 +220,7 @@ class ResourceOpenstackNetworkingSubnetV2(HclObject):
     network_id = attr.ib(default=None)
     cidr = attr.ib(default=None)
     available_hosts = attr.ib(default=None)
-    gateway = attr.ib(default=None)
+    gateway_port_name = attr.ib(default=None)
     @classmethod
     def create(
         cls,
@@ -235,6 +251,10 @@ class ResourceOpenstackNetworkingSubnetV2(HclObject):
             available_hosts=list(ipaddress.ip_network(cidr, strict=False).hosts())
         )
 
+    def update_cidr(self, new_cidr):
+        self.cidr = new_cidr
+        self.arguments['cidr'] = new_cidr
+        self.available_hosts = list(ipaddress.ip_network(new_cidr, strict=False).hosts())
 
 @attr.s
 class ResourceOpenstackNetworkingPortV2(HclObject):
@@ -252,6 +272,9 @@ class ResourceOpenstackNetworkingPortV2(HclObject):
                     "ip_address": address,
                 },
             )
+
+        def update_address(self, new_address):
+            self.arguments["ip_address"] = new_address
 
     @classmethod
     def create(
@@ -281,10 +304,15 @@ class ResourceOpenstackNetworkingPortV2(HclObject):
             instance=instance,
         )
 
+    def update_address(self, new_address):
+        self.address = new_address
+        self.attributes[0].update_address(new_address)
 
 @attr.s
 class ResourceOpenstackComputeInstanceV2(HclObject):
-
+    name = attr.ib(default=None)
+    port_names = attr.ib(default=None)
+    floating_ip = attr.ib(default=False)
     class Network(HclAttribute):
         @classmethod
         def create(cls, port_name):
@@ -318,6 +346,8 @@ class ResourceOpenstackComputeInstanceV2(HclObject):
                     port_name=port_name
                 ) for port_name in port_names
             ],
+            name=name,
+            port_names=port_names,
         )
 
 
@@ -345,6 +375,8 @@ class DataTemplateFile(HclObject):
             ] if vars else None,
         )
 
+    def set_gateway_port(self, port_name):
+        self.attributes[0].arguments["gateway-ip"] = f"openstack_networking_port_v2.{port_name}.all_fixed_ips[0]"
 
 @attr.s
 class DataTemplateCloudinitConfig(HclObject):
@@ -374,4 +406,32 @@ class DataTemplateCloudinitConfig(HclObject):
                     template_name
                 )
             ],
+        )
+
+@attr.s
+class ResourceOpenstackNetworkingFloatingipV2(HclObject):
+    @classmethod
+    def create(cls, name):
+        return cls(
+            block_type=BLOCK_TYPE_RESOURCE,
+            block_label="openstack_networking_floatingip_v2",
+            block_name=name,
+            arguments={
+                "pool": "var.external_network",
+            },
+        )
+
+@attr.s
+class ResourceOpenstackComputeFloatingipAssociateV2(HclObject):
+    @classmethod
+    def create(cls, name, flip_name, instance_name):
+        return cls(
+            block_type=BLOCK_TYPE_RESOURCE,
+            block_label="openstack_compute_floatingip_associate_v2",
+            block_name=name,
+            arguments={
+                "floating_ip": f"openstack_networking_floatingip_v2.{flip_name}.address",
+                "instance_id": f"openstack_compute_instance_v2.{instance_name}.id",
+                "fixed_ip": f"openstack_compute_instance_v2.{instance_name}.network.0.fixed_ip_v4",
+            }
         )
