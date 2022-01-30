@@ -318,7 +318,7 @@ def validate_networking(solution):
         subnet = solution.get_subnet_by_name(port.subnet_name)
         network_obj = ipaddress.ip_network(subnet.cidr)
         if not ipaddress.ip_address(port.address) in network_obj:
-            print(f"Port {port.name} address {port.address} is not in subnet {subnet}")
+            print(f"Port {port.name} address {port.address} is not in subnet {subnet.subnet_name}, please enter a new address")
             updated_port = update_port_address(port, subnet)
             solution.ports[index] = updated_port
  
