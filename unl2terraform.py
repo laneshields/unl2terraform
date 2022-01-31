@@ -215,7 +215,7 @@ def update_network_address(solution, subnet):
         else:
             subnet.update_cidr(str(network))
             if subnet.subnet_name == solution.management_network_name:
-                subnet.available_hosts = subnet.available_hosts[4:]
+                subnet.available_hosts = subnet.available_hosts[5:]
             return subnet
 
 def update_port_address(solution, port):
