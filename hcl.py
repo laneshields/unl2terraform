@@ -219,8 +219,10 @@ class ResourceOpenstackNetworkingSubnetV2(HclObject):
     subnet_name = attr.ib(default=None)
     network_id = attr.ib(default=None)
     cidr = attr.ib(default=None)
-    available_hosts = attr.ib(default=None)
+    ports = attr.ib(default=[])
     gateway_port_name = attr.ib(default=None)
+    enable_dhcp = attr.ib(default=False)
+
     @classmethod
     def create(
         cls,
@@ -248,13 +250,29 @@ class ResourceOpenstackNetworkingSubnetV2(HclObject):
             subnet_name=name,
             network_id=network_id,
             cidr=cidr,
-            available_hosts=list(ipaddress.ip_network(cidr, strict=False).hosts())
+            enable_dhcp=enable_dhcp,
+            # Without this all ports get added to all networks
+            ports=[],
         )
 
     def update_cidr(self, new_cidr):
         self.cidr = new_cidr
         self.arguments['cidr'] = new_cidr
-        self.available_hosts = list(ipaddress.ip_network(new_cidr, strict=False).hosts())
+
+    def update_port(self, index, port):
+        self.ports[index] = port
+
+    def available_addresses(self):
+        all_hosts = list(ipaddress.ip_network(self.cidr))
+        if self.enable_dhcp:
+            all_hosts = all_hosts[4:]
+
+        for port in self.ports:
+            port_address = ipaddress.ip_address(port.address)
+            if port_address in all_hosts:
+              all_hosts.remove(port_address)
+
+        return all_hosts
 
 @attr.s
 class ResourceOpenstackNetworkingPortV2(HclObject):

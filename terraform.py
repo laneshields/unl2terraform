@@ -287,7 +287,6 @@ class TerraformSolution:
     variables = attr.ib(default=[])
     networks = attr.ib(default=[])
     subnets = attr.ib(default=[])
-    ports = attr.ib(default=[])
     instances = attr.ib(default=[])
     templates = attr.ib(default=[])
     cloud_inits = attr.ib(default=[])
@@ -325,7 +324,6 @@ class TerraformSolution:
             dns_nameservers=dns_servers
         )
         # The first four addresses of this network are allocated to OpenStack
-        management_subnet.available_hosts = management_subnet.available_hosts[4:]
         self.subnets.append(management_subnet)
 
         self.solution_management_router_interface = hcl.ResourceOpenstackNetworkingRouterInterfaceV2.create(
@@ -346,17 +344,11 @@ class TerraformSolution:
                 return subnet
         return self.solution_management_subnet
 
-    def get_ports_in_subnet(self, subnet_name):
-        port_list = []
-        for port in self.ports:
-            if port.subnet_name == subnet_name:
-                port_list.append(port)
-        return port_list
-
     def get_port_by_name(self, port_name):
-        for port in self.ports:
-            if port.name == port_name:
-                return port
+        for subnet in self.subnets:
+            for index, port in enumerate(subnet.ports):
+                if port.name == port_name:
+                    return port, index
 
     def write_terraform(self):
         terraform_directory = pathlib.Path(self.output_directory) / self.TERRAFORM_DIRECTORY
@@ -387,15 +379,14 @@ class TerraformSolution:
         (terraform_directory / self.NETWORKS_FILE).write_text(network_text)
 
         subnet_text = ""
+        port_text = ""
         for subnet in self.subnets:
             subnet_text += subnet.render() + "\n"
 
+            for port in subnet.ports:
+                port_text += port.render() + "\n"
+
         (terraform_directory / self.SUBNETS_FILE).write_text(subnet_text)
-
-        port_text = ""
-        for port in self.ports:
-            port_text += port.render() + "\n"
-
         (terraform_directory / self.PORTS_FILE).write_text(port_text)
 
         template_text = hcl.DataTemplateFile.create(
@@ -414,7 +405,7 @@ class TerraformSolution:
 
         nw0 = None
         for instance in self.instances:
-            port0 = self.get_port_by_name(instance.port_names[0])
+            port0, _ = self.get_port_by_name(instance.port_names[0])
             if port0.subnet_name != self.management_network_name:
                 gateway_port = self.get_subnet_by_name(port0.subnet_name).gateway_port_name
                 template_text += hcl.DataTemplateFile.create(
@@ -511,7 +502,7 @@ class TerraformSolution:
             host_vars_text = ""
             i = 0
             for interface in instance.port_names:
-                port = self.get_port_by_name(interface)
+                port, _ = self.get_port_by_name(interface)
                 if i==0:
                     if not instance.floating_ip:
                         host_vars_text += f"ansible_host: {port.address}\n\n"
@@ -522,7 +513,7 @@ class TerraformSolution:
                     host_vars_text += f"  inet4: {port.address}\n"
                     host_vars_text += f"  prefix: {subnet.cidr.split('/')[1]}\n"
                     if subnet.gateway_port_name is not None:
-                        gateway_port = self.get_port_by_name(subnet.gateway_port_name)
+                        gateway_port, _ = self.get_port_by_name(subnet.gateway_port_name)
                         host_vars_text += f"  gateway: {gateway_port.address}\n"
                 i += 1
             (host_vars_directory / f"{instance.name}.yml").write_text(host_vars_text)

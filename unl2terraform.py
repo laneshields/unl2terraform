@@ -154,8 +154,7 @@ def display_network(solution, subnet, subnet_index):
         print(f"Network {subnet.subnet_name} uses CIDR {subnet.cidr}")
         print(f"Ports in {subnet.subnet_name}:")
         i = 1
-        subnet_ports = solution.get_ports_in_subnet(subnet.subnet_name)
-        for port in subnet_ports:
+        for port in subnet.ports:
             gateway = False
             if port.name == subnet.gateway_port_name:
                 gateway = True
@@ -171,14 +170,14 @@ def display_network(solution, subnet, subnet_index):
 
         try:
             index = int(choice) - 1
-            port_selection = subnet_ports[index]
+            port_selection = subnet.ports[index]
         except (ValueError, IndexError):
             if choice == "c":
                 updated_subnet = update_network_address(solution, subnet)
                 if updated_subnet is not None:
                     solution.subnets[subnet_index] = updated_subnet
             elif choice == "g":
-                updated_subnet = select_gateway(subnet, subnet_ports)
+                updated_subnet = select_gateway(subnet, subnet.ports)
                 if updated_subnet is not None:
                     solution.subnets[subnet_index] = updated_subnet
             elif choice == "x":
@@ -186,7 +185,7 @@ def display_network(solution, subnet, subnet_index):
             else:
                 print("Please enter a valid selection")
         else:
-            update_port_address(port_selection, subnet)
+            update_port_address(solution, port_selection)
             port_selection = None
 
 def select_gateway(subnet, subnet_ports):
@@ -219,7 +218,7 @@ def update_network_address(solution, subnet):
                 subnet.available_hosts = subnet.available_hosts[4:]
             return subnet
 
-def update_port_address(port, subnet):
+def update_port_address(solution, port):
     while True:
         new_address = input(f"Please enter a new address for port {port.name}: ")
         try:
@@ -229,12 +228,10 @@ def update_port_address(port, subnet):
                 break
             print("Please enter a valid address")
         else:
+            subnet = solution.get_subnet_by_name(port.subnet_name)
             if new_ip in ipaddress.ip_network(subnet.cidr):
-                if new_ip in subnet.available_hosts:
-                    port.update_address(new_address)
-                    return port
-                else:
-                    print(f"Address {new_address} is already allocated network {subnet.cidr}, please try another address")
+                port.update_address(new_address)
+                return port
             else:
                 print(f"Address {new_address} is not in network {subnet.cidr}, please enter a valid address")
 
@@ -276,7 +273,7 @@ def set_floating_ip(solution):
             if choice == "x":
                 break
         else:
-            instance_port0 = solution.get_port_by_name(instance.port_names[0])
+            instance_port0, _ = solution.get_port_by_name(instance.port_names[0])
             if instance_port0.subnet_name == solution.management_network_name:
                 instance.floating_ip=True
                 solution.instances[index] = instance
@@ -291,7 +288,7 @@ def display_instance(solution, instance):
         i = 1
         instance_port_names = instance.port_names
         for port_index, port_name in enumerate(instance_port_names):
-            port = solution.get_port_by_name(port_name)
+            port, _ = solution.get_port_by_name(port_name)
             print(f"{i}) {port.name} - instance: {port.instance}, address: {port.address}")
             i += 1
         print("\n")
@@ -308,22 +305,28 @@ def display_instance(solution, instance):
             else:
                 print("Please enter a valid selection")
         else:
-            port = solution.get_port_by_name(selected_port_name)
+            port, index = solution.get_port_by_name(selected_port_name)
             subnet = solution.get_subnet_by_name(port.subnet_name)
-            updated_port = update_port_address(port, subnet)
-            solution.ports[port_index] = updated_port
+            updated_port = update_port_address(solution, port)
+            subnet.update_port(index, updated_port)
 
 def validate_networking(solution):
-    for index, port in enumerate(solution.ports):
-        subnet = solution.get_subnet_by_name(port.subnet_name)
+    for subnet in solution.subnets:
         network_obj = ipaddress.ip_network(subnet.cidr)
-        if not ipaddress.ip_address(port.address) in network_obj:
-            print(f"Port {port.name} address {port.address} is not in subnet {subnet.subnet_name}, please enter a new address")
-            updated_port = update_port_address(port, subnet)
-            solution.ports[index] = updated_port
+        subnet_addresses = []
+        for index, port in enumerate(subnet.ports):
+            if not ipaddress.ip_address(port.address) in network_obj:
+                print(f"Port {port.name} address {port.address} is not in subnet {subnet.subnet_name}, please enter a new address")
+                updated_port = update_port_address(solution, port)
+                subnet.update_port(index, updated_port)
  
+            if port.address not in subnet_addresses:
+                subnet_addresses.append(port.address)
+            else:
+                print(f"Subnet {subnet.subnet_name} has multiple ports using address {port.address} please fix before writing solution")
+
     for instance in solution.instances:
-        port0 = solution.get_port_by_name(instance.port_names[0])
+        port0, _ = solution.get_port_by_name(instance.port_names[0])
         subnet = solution.get_subnet_by_name(port0.subnet_name)
         if subnet.subnet_name != solution.management_network_name and subnet.gateway_port_name is None:
             print(f"Subnet {subnet.subnet_name} needs a gateway selected due to cloud-init for instance {instance.name}")
@@ -394,19 +397,19 @@ def handle_nodes(nodes, solution):
             if_id = interface.get("id")
             network_id = interface.get("network_id")
             port_name = f"{node_name}_{if_id}"
-            network = solution.get_subnet_by_id(network_id)
+            subnet = solution.get_subnet_by_id(network_id)
+            first_address = str(subnet.available_addresses()[0])
             if if_id == "0":
-                nw0 = network
-            first_address = str(network.available_hosts[0])
-            addr = ipaddress.ip_address(first_address)
-            network.available_hosts.remove(addr)
+                nw0 = subnet
+            available_addresses = str(subnet.available_addresses())
 
-            solution.ports.append(hcl.ResourceOpenstackNetworkingPortV2.create(
+            port = hcl.ResourceOpenstackNetworkingPortV2.create(
               name=port_name,
-              subnet_name=network.subnet_name,
+              subnet_name=subnet.subnet_name,
               address=first_address,
               instance=node_name,
-            ))
+            )
+            subnet.ports.append(port)
             ifnames.append(port_name)
         if nw0.subnet_name == solution.management_network_name:
             default_template = True
