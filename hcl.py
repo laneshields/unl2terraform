@@ -264,6 +264,8 @@ class ResourceOpenstackNetworkingSubnetV2(HclObject):
 
     def available_addresses(self):
         all_hosts = list(ipaddress.ip_network(self.cidr))
+        # Remove network and broadcast address
+        all_hosts = all_hosts[1:-1]
         if self.enable_dhcp:
             all_hosts = all_hosts[4:]
 

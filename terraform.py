@@ -32,6 +32,7 @@ ssh_pwauth: True
 
 STATIC_ETH0_TEMPLATE = """groups:
 - t128
+- ha_user
 users:
 - default
 - name: t128
@@ -40,6 +41,8 @@ users:
   lock_passwd: False
   plain_text_passwd: exit33
 - name: ha_user
+  primary-group: ha_user
+  groups: wheel
   sudo: ALL=(ALL) ALL
   lock_passwd: False
   plain_text_passwd: exit33
@@ -474,9 +477,6 @@ class TerraformSolution:
             "\n" + \
             "t128_router_name: 128t-router\n"
             "t128_node_name: 128t-node\n"
-            "\n" + \
-            "t128_conductor_ips:\n"
-            "- IMPLEMENT_THIS\n"
         )
 
         (group_vars_directory / "128T-nodes.yml").write_text(
@@ -485,7 +485,10 @@ class TerraformSolution:
             "ansible_become_password: exit33\n" + \
             "t128_management_ip: '127.0.0.1'\n" + \
             "t128_needs_reboot: true\n" + \
-            "preloaded_image: 1\n"
+            "preloaded_image: 1\n" + \
+            "\n" + \
+            "t128_conductor_ips:\n"
+            "- IMPLEMENT_THIS\n"
         )
 
         (group_vars_directory / "128T-conductors.yml").write_text(
